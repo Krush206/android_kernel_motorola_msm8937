@@ -958,7 +958,7 @@ static int usb_bam_disconnect_ipa_cons(
 	struct usb_bam_ctx_type *ctx = &msm_usb_bam[cur_bam];
 	struct usb_bam_pipe_connect *pipe_connect;
 	struct sps_pipe *pipe;
-	u32 timeout = 50, pipe_empty;
+	u32 timeout = 10, pipe_empty;
 	struct usb_bam_sps_type usb_bam_sps = ctx->usb_bam_sps;
 	struct sps_connect *sps_connection;
 	bool inject_zlt = true;
@@ -2764,17 +2764,14 @@ static void usb_bam_sps_events(enum sps_callback_case sps_cb_case, void *user)
 
 		log_event_dbg("%s: received SPS_CALLBACK_BAM_TIMER_IRQ\n",
 				__func__);
-		bam = get_bam_type_from_core_name((char *)user);
 
+		bam = get_bam_type_from_core_name((char *)user);
 		if (bam < 0 || bam >= MAX_BAMS) {
 			log_event_err("%s: Invalid bam, type=%d ,name=%s\n",
 				__func__, bam, (char *)user);
 			return;
 		}
-
 		ctx = &msm_usb_bam[bam];
-		spin_lock(&ctx->usb_bam_lock);
-
 		spin_lock(&ctx->usb_bam_lock);
 
 		ctx->is_bam_inactivity = true;

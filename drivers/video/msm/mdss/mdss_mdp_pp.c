@@ -178,7 +178,7 @@ struct mdp_csc_cfg mdp_csc_10bit_convert[MDSS_MDP_MAX_CSC] = {
 			0x0254, 0xff37, 0xfe60,
 			0x0254, 0x0409, 0x0000,
 		},
-		{ 0xffc0, 0xfe00, 0xfe00,},
+		{ 0xffc0, 0xffe0, 0xffe0,},
 		{ 0x0, 0x0, 0x0,},
 		{ 0x40, 0x3ac, 0x40, 0x3c0, 0x40, 0x3c0,},
 		{ 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
@@ -190,7 +190,7 @@ struct mdp_csc_cfg mdp_csc_10bit_convert[MDSS_MDP_MAX_CSC] = {
 			0x0200, 0xff50, 0xfe92,
 			0x0200, 0x038b, 0x0000,
 		},
-		{ 0x0000, 0xfe00, 0xfe00,},
+		{ 0x0000, 0xffe0, 0xffe0,},
 		{ 0x0, 0x0, 0x0,},
 		{ 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
 		{ 0x0, 0x3ff, 0x0, 0x3ff, 0x0, 0x3ff,},
@@ -2028,7 +2028,7 @@ static int pp_mixer_setup(struct mdss_mdp_mixer *mixer)
 	if (disp_num < MDSS_BLOCK_DISP_NUM)
 		flags = mdss_pp_res->pp_disp_flags[disp_num];
 	else
-		return -EINVAL;
+		flags = 0;
 
 	if (mixer->num == MDSS_MDP_INTF_LAYERMIXER3)
 		lm_bitmask = BIT(20);
@@ -2338,7 +2338,7 @@ static int pp_dspp_setup(u32 disp_num, struct mdss_mdp_mixer *mixer)
 
 		flags = mdss_pp_res->pp_disp_flags[disp_num];
 	} else {
-		return -EINVAL;
+		flags = 0;
 	}
 
 	mixer_cnt = mdss_mdp_get_ctl_mixers(disp_num, mixer_id);
@@ -2644,7 +2644,7 @@ int mdss_mdp_pp_setup_locked(struct mdss_mdp_ctl *ctl)
 		if (ret)
 			pr_err("Updated reg_bus_scale failed, ret = %d", ret);
 	}
-	if (disp_num < MDSS_BLOCK_DISP_NUM && IS_PP_RESUME_COMMIT(flags))
+	if (IS_PP_RESUME_COMMIT(flags))
 		mdss_pp_res->pp_disp_flags[disp_num] &=
 			~PP_FLAGS_RESUME_COMMIT;
 	mutex_unlock(&mdss_pp_mutex);

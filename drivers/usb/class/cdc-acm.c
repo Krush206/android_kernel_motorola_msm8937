@@ -336,17 +336,17 @@ static void acm_ctrl_irq(struct urb *urb)
 
 		if (difference & ACM_CTRL_DSR)
 			acm->iocount.dsr++;
+		if (difference & ACM_CTRL_BRK)
+			acm->iocount.brk++;
+		if (difference & ACM_CTRL_RI)
+			acm->iocount.rng++;
 		if (difference & ACM_CTRL_DCD)
 			acm->iocount.dcd++;
-		if (newctrl & ACM_CTRL_BRK)
-			acm->iocount.brk++;
-		if (newctrl & ACM_CTRL_RI)
-			acm->iocount.rng++;
-		if (newctrl & ACM_CTRL_FRAMING)
+		if (difference & ACM_CTRL_FRAMING)
 			acm->iocount.frame++;
-		if (newctrl & ACM_CTRL_PARITY)
+		if (difference & ACM_CTRL_PARITY)
 			acm->iocount.parity++;
-		if (newctrl & ACM_CTRL_OVERRUN)
+		if (difference & ACM_CTRL_OVERRUN)
 			acm->iocount.overrun++;
 		spin_unlock(&acm->read_lock);
 
@@ -381,7 +381,7 @@ static int acm_submit_read_urb(struct acm *acm, int index, gfp_t mem_flags)
 
 	res = usb_submit_urb(acm->read_urbs[index], mem_flags);
 	if (res) {
-		if (res != -EPERM && res != -ENODEV) {
+		if (res != -EPERM) {
 			dev_err(&acm->data->dev,
 					"%s - usb_submit_urb failed: %d\n",
 					__func__, res);
@@ -435,8 +435,7 @@ static void acm_read_bulk_callback(struct urb *urb)
 	if (urb->status) {
 		dev_dbg(&acm->data->dev, "%s - non-zero urb status: %d\n",
 							__func__, urb->status);
-		if ((urb->status != -ENOENT) || (urb->actual_length == 0))
-			return;
+		return;
 	}
 
 	usb_mark_last_busy(acm->dev);
@@ -501,13 +500,6 @@ static int acm_tty_install(struct tty_driver *driver, struct tty_struct *tty)
 	retval = tty_standard_install(driver, tty);
 	if (retval)
 		goto error_init_termios;
-
-	/*
-	 * Suppress initial echoing for some devices which might send data
-	 * immediately after acm driver has been installed.
-	 */
-	if (acm->quirks & DISABLE_ECHO)
-		tty->termios.c_lflag &= ~ECHO;
 
 	tty->driver_data = acm;
 
@@ -1146,7 +1138,7 @@ static int acm_probe(struct usb_interface *intf,
 		}
 	}
 
-	while (buflen >= 3) { /* minimum length making sense */
+	while (buflen > 0) {
 		elength = buffer[0];
 		if (!elength) {
 			dev_err(&intf->dev, "skipping garbage byte\n");
@@ -1436,8 +1428,6 @@ made_compressed_probe:
 				usb_sndbulkpipe(usb_dev, epwrite->bEndpointAddress),
 				NULL, acm->writesize, acm_write_bulk, snd);
 		snd->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-		if (quirks & SEND_ZERO_PACKET)
-			snd->urb->transfer_flags |= URB_ZERO_PACKET;
 		snd->instance = acm;
 	}
 
@@ -1701,9 +1691,6 @@ static const struct usb_device_id acm_ids[] = {
 	{ USB_DEVICE(0x0e8d, 0x0003), /* FIREFLY, MediaTek Inc; andrey.arapov@gmail.com */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
-	{ USB_DEVICE(0x0e8d, 0x2000), /* MediaTek Inc Preloader */
-	.driver_info = DISABLE_ECHO, /* DISABLE ECHO in termios flag */
-	},
 	{ USB_DEVICE(0x0e8d, 0x3329), /* MediaTek Inc GPS */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
@@ -1722,9 +1709,6 @@ static const struct usb_device_id acm_ids[] = {
 	{ USB_DEVICE(0x0ace, 0x1611), /* ZyDAS 56K USB MODEM - new version */
 	.driver_info = SINGLE_RX_URB, /* firmware bug */
 	},
-	{ USB_DEVICE(0x11ca, 0x0201), /* VeriFone Mx870 Gadget Serial */
-	.driver_info = SINGLE_RX_URB,
-	},
 	{ USB_DEVICE(0x22b8, 0x7000), /* Motorola Q Phone */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
@@ -1738,9 +1722,6 @@ static const struct usb_device_id acm_ids[] = {
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
 	{ USB_DEVICE(0x0572, 0x1328), /* Shiro / Aztech USB MODEM UM-3100 */
-	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
-	},
-	{ USB_DEVICE(0x0572, 0x1349), /* Hiro (Conexant) USB MODEM H50228 */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
 	},
 	{ USB_DEVICE(0x20df, 0x0001), /* Simtec Electronics Entropy Key */
@@ -1793,12 +1774,6 @@ static const struct usb_device_id acm_ids[] = {
 	.driver_info = NO_UNION_NORMAL, /* reports zero length descriptor */
 	},
 	{ USB_DEVICE(0xfff0, 0x0100), /* DATECS FP-2000 */
-	.driver_info = NO_UNION_NORMAL, /* reports zero length descriptor */
-	},
-	{ USB_DEVICE(0x09d8, 0x0320), /* Elatec GmbH TWN3 */
-	.driver_info = NO_UNION_NORMAL, /* has misplaced union descriptor */
-	},
-	{ USB_DEVICE(0x0ca6, 0xa050), /* Castles VEGA3000 */
 	.driver_info = NO_UNION_NORMAL, /* reports zero length descriptor */
 	},
 
@@ -1894,23 +1869,6 @@ static const struct usb_device_id acm_ids[] = {
 	},
 #endif
 
-	/*Samsung phone in firmware update mode */
-	{ USB_DEVICE(0x04e8, 0x685d),
-	.driver_info = IGNORE_DEVICE,
-	},
-
-	/* Exclude Infineon Flash Loader utility */
-	{ USB_DEVICE(0x058b, 0x0041),
-	.driver_info = IGNORE_DEVICE,
-	},
-
-	{ USB_DEVICE(0x1bc7, 0x0021), /* Telit 3G ACM only composition */
-	.driver_info = SEND_ZERO_PACKET,
-	},
-	{ USB_DEVICE(0x1bc7, 0x0023), /* Telit 3G ACM + ECM composition */
-	.driver_info = SEND_ZERO_PACKET,
-	},
-
 	/* control interfaces without any protocol set */
 	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,
 		USB_CDC_PROTO_NONE) },
@@ -1928,10 +1886,6 @@ static const struct usb_device_id acm_ids[] = {
 		USB_CDC_ACM_PROTO_AT_3G) },
 	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,
 		USB_CDC_ACM_PROTO_AT_CDMA) },
-
-	{ USB_DEVICE(0x1519, 0x0452), /* Intel 7260 modem */
-	.driver_info = SEND_ZERO_PACKET,
-	},
 
 	{ }
 };

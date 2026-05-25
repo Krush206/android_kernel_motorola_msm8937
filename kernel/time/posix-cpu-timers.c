@@ -103,7 +103,7 @@ static void bump_cpu_timer(struct k_itimer *timer,
 			continue;
 
 		timer->it.cpu.expires += incr;
-		timer->it_overrun += 1LL << i;
+		timer->it_overrun += 1 << i;
 		delta -= incr;
 	}
 }
@@ -853,10 +853,10 @@ static void check_thread_timers(struct task_struct *tsk,
 	/*
 	 * Check for the special case thread timers.
 	 */
-	soft = READ_ONCE(sig->rlim[RLIMIT_RTTIME].rlim_cur);
+	soft = ACCESS_ONCE(sig->rlim[RLIMIT_RTTIME].rlim_cur);
 	if (soft != RLIM_INFINITY) {
 		unsigned long hard =
-			READ_ONCE(sig->rlim[RLIMIT_RTTIME].rlim_max);
+			ACCESS_ONCE(sig->rlim[RLIMIT_RTTIME].rlim_max);
 
 		if (hard != RLIM_INFINITY &&
 		    tsk->rt.timeout > DIV_ROUND_UP(hard, USEC_PER_SEC/HZ)) {
@@ -959,11 +959,11 @@ static void check_process_timers(struct task_struct *tsk,
 			 SIGPROF);
 	check_cpu_itimer(tsk, &sig->it[CPUCLOCK_VIRT], &virt_expires, utime,
 			 SIGVTALRM);
-	soft = READ_ONCE(sig->rlim[RLIMIT_CPU].rlim_cur);
+	soft = ACCESS_ONCE(sig->rlim[RLIMIT_CPU].rlim_cur);
 	if (soft != RLIM_INFINITY) {
 		unsigned long psecs = cputime_to_secs(ptime);
 		unsigned long hard =
-			READ_ONCE(sig->rlim[RLIMIT_CPU].rlim_max);
+			ACCESS_ONCE(sig->rlim[RLIMIT_CPU].rlim_max);
 		cputime_t x;
 		if (psecs >= hard) {
 			/*
@@ -1203,12 +1203,11 @@ void set_process_cpu_timer(struct task_struct *tsk, unsigned int clock_idx,
 			   cputime_t *newval, cputime_t *oldval)
 {
 	unsigned long long now;
-        int ret;
 
 	WARN_ON_ONCE(clock_idx == CPUCLOCK_SCHED);
-	ret = cpu_timer_sample_group(clock_idx, tsk, &now);
+	cpu_timer_sample_group(clock_idx, tsk, &now);
 
-	if (!ret && oldval) {
+	if (oldval) {
 		/*
 		 * We are setting itimer. The *oldval is absolute and we update
 		 * it to be relative, *newval argument is relative and we update

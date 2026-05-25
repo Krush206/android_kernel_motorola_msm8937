@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015,2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,6 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/alarmtimer.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/rtc.h>
@@ -22,6 +21,7 @@
 #include <linux/spmi.h>
 #include <linux/spinlock.h>
 #include <linux/spmi.h>
+#include <linux/alarmtimer.h>
 
 /* RTC/ALARM Register offsets */
 #define REG_OFFSET_ALARM_RW	0x40
@@ -378,15 +378,6 @@ qpnp_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 				alarm->time.tm_sec, alarm->time.tm_mday,
 				alarm->time.tm_mon, alarm->time.tm_year);
 
-	rc = qpnp_read_wrapper(rtc_dd, value,
-		rtc_dd->alarm_base + REG_OFFSET_ALARM_CTRL1, 1);
-	if (rc) {
-		dev_err(dev, "Read from ALARM CTRL1 failed\n");
-		return rc;
-	}
-
-	alarm->enabled = !!(value[0] & BIT_RTC_ALARM_ENABLE);
-
 	return 0;
 }
 
@@ -481,8 +472,6 @@ static int qpnp_rtc_probe(struct spmi_device *spmi)
 	struct qpnp_rtc *rtc_dd;
 	struct resource *resource;
 	struct spmi_resource *spmi_resource;
-	u8 value[4] = {0};
-	u8 reg;
 
 	rtc_dd = devm_kzalloc(&spmi->dev, sizeof(*rtc_dd), GFP_KERNEL);
 	if (rtc_dd == NULL) {
@@ -608,26 +597,8 @@ static int qpnp_rtc_probe(struct spmi_device *spmi)
 		goto fail_rtc_enable;
 	}
 
-	/* disable rtc alarm set by shipmode if exists */
-	if (qpnp_pon_check_shipmode_info()) {
-		dev_warn(&spmi->dev, "Disable Shipmode alarm\n");
-		/* Disable RTC alarms */
-		reg = rtc_dd->alarm_ctrl_reg1;
-		reg &= ~BIT_RTC_ALARM_ENABLE;
-		rc = qpnp_write_wrapper(rtc_dd, &reg,
-			rtc_dd->alarm_base + REG_OFFSET_ALARM_CTRL1, 1);
-		if (rc)
-			dev_err(rtc_dd->rtc_dev, "SPMI write ctrl failed\n");
-		else
-			rtc_dd->alarm_ctrl_reg1 = reg;
-		/* Clear Alarm register */
-		rc = qpnp_write_wrapper(rtc_dd, value,
-			rtc_dd->alarm_base + REG_OFFSET_ALARM_RW,
-			NUM_8_BIT_RTC_REGS);
-		if (rc)
-			dev_err(rtc_dd->rtc_dev, "SPMI write alarm_rw failed\n");
-
-	}
+	/* Init power_on_alarm after adding rtc device */
+	power_on_alarm_init();
 	qpnp_pon_store_shipmode_info(RESET_SHIPMODE_INFO_SHPMOD_REASON |
 				     RESET_SHIPMODE_INFO_ARMED_REASON, 0);
 
@@ -672,12 +643,7 @@ static inline int qpnp_rtc_is_rtc_alarm_enabled(struct qpnp_rtc *rtc_dd)
 	return (rtc_dd->alarm_ctrl_reg1 & BIT_RTC_ALARM_ENABLE) ? 1 : 0;
 }
 
-/* Module parameter to control shipmode delay in sec */
-static unsigned int shipmode_delay = 2592000;
-module_param(shipmode_delay, uint, 0644);
-MODULE_PARM_DESC(shipmode_delay, "shipmode delay time in second");
-EXPORT_SYMBOL(shipmode_delay);
-
+#define SHIPMODE_DELAY_SECS 2592000
 static void qpnp_rtc_shutdown(struct spmi_device *spmi)
 {
 	u8 value[4] = {0};
@@ -728,15 +694,7 @@ fail_alarm_disable:
 
 	if ((power_on_alarm_empty() != 1) ||
 		qpnp_rtc_is_rtc_alarm_enabled(rtc_dd)) {
-		qpnp_pon_store_shipmode_info(RESET_SHIPMODE_INFO_SHPMOD_REASON |
-					RESET_SHIPMODE_INFO_ARMED_REASON, 0);
 		dev_warn(&spmi->dev, "Queue not empty unable to setup Shipmode\n");
-		return;
-	}
-
-	if (qpnp_pon_store_shipmode_info(RESET_SHIPMODE_INFO_SHPMOD_REASON,
-				     RESET_SHIPMODE_INFO_SHPMOD_REASON)) {
-		dev_warn(&spmi->dev, "Failed to set pon Shipmode\n");
 		return;
 	}
 
@@ -748,10 +706,12 @@ fail_alarm_disable:
 
 	rtc_tm_to_time(&rtc_tm, &secs_rtc);
 	dev_warn(&spmi->dev, "Shipmode current time %ld secs\n", secs_rtc);
-	secs_rtc += shipmode_delay;
+	secs_rtc += SHIPMODE_DELAY_SECS;
 	shipmode_alarm.enabled = 1;
 	rtc_time_to_tm(secs_rtc, &shipmode_alarm.time);
 	dev_warn(&spmi->dev, "Setup Shipmode trigger %ld secs\n", secs_rtc);
+	qpnp_pon_store_shipmode_info(RESET_SHIPMODE_INFO_SHPMOD_REASON,
+				     RESET_SHIPMODE_INFO_SHPMOD_REASON);
 	qpnp_rtc_set_alarm(&spmi->dev, &shipmode_alarm);
 }
 

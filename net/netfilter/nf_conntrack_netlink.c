@@ -713,10 +713,6 @@ ctnetlink_conntrack_event(unsigned int events, struct nf_ct_event *item)
 		if (events & (1 << IPCT_SEQADJ) &&
 		    ctnetlink_dump_ct_seq_adj(skb, ct) < 0)
 			goto nla_put_failure;
-
-		if (events & (1 << IPCT_COUNTER) &&
-		    ctnetlink_dump_acct(skb, ct, 0) < 0)
-			goto nla_put_failure;
 	}
 
 #ifdef CONFIG_NF_CONNTRACK_MARK
@@ -832,13 +828,8 @@ restart:
 	}
 out:
 	local_bh_enable();
-	if (last) {
-		/* nf ct hash resize happened, now clear the leftover. */
-		if ((struct nf_conn *)cb->args[1] == last)
-			cb->args[1] = 0;
-
+	if (last)
 		nf_ct_put(last);
-	}
 
 	return skb->len;
 }
@@ -912,7 +903,7 @@ static const struct nla_policy tuple_nla_policy[CTA_TUPLE_MAX+1] = {
 static int
 ctnetlink_parse_tuple(const struct nlattr * const cda[],
 		      struct nf_conntrack_tuple *tuple,
-		      u32 type, u_int8_t l3num)
+		      enum ctattr_type type, u_int8_t l3num)
 {
 	struct nlattr *tb[CTA_TUPLE_MAX+1];
 	int err;
@@ -2263,7 +2254,7 @@ static struct nfq_ct_hook ctnetlink_nfqueue_hook = {
 static inline int
 ctnetlink_exp_dump_tuple(struct sk_buff *skb,
 			 const struct nf_conntrack_tuple *tuple,
-			 u32 type)
+			 enum ctattr_expect type)
 {
 	struct nlattr *nest_parms;
 
@@ -3256,7 +3247,6 @@ static void __exit ctnetlink_exit(void)
 #ifdef CONFIG_NETFILTER_NETLINK_QUEUE_CT
 	RCU_INIT_POINTER(nfq_ct_hook, NULL);
 #endif
-	synchronize_rcu();
 }
 
 module_init(ctnetlink_init);

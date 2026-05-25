@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -310,7 +310,7 @@ static void ipa_a5_svc_recv_msg(struct work_struct *work)
 	int rc;
 
 	do {
-		IPAWANDBG_LOW("Notified about a Receive Event");
+		IPAWANDBG("Notified about a Receive Event");
 		rc = qmi_recv_msg(ipa_svc_handle);
 	} while (rc == 0);
 	if (rc != -ENOMSG)
@@ -384,7 +384,7 @@ static int ipa_check_qmi_response(int rc,
 		req_id, result, error);
 		return result;
 	}
-	IPAWANDBG_LOW("Received %s successfully\n", resp_type);
+	IPAWANDBG("Received %s successfully\n", resp_type);
 	return 0;
 }
 
@@ -508,14 +508,6 @@ int qmi_filter_request_send(struct ipa_install_fltr_rule_req_msg_v01 *req)
 	struct ipa_install_fltr_rule_resp_msg_v01 resp;
 	struct msg_desc req_desc, resp_desc;
 	int rc;
-
-	/* check if modem up */
-	if (!qmi_indication_fin ||
-		!qmi_modem_init_fin ||
-		!ipa_q6_clnt) {
-		IPAWANDBG("modem QMI haven't up yet\n");
-		return -EINVAL;
-	}
 
 	/* check if the filter rules from IPACM is valid */
 	if (req->filter_spec_list_len == 0) {
@@ -713,7 +705,7 @@ static void ipa_q6_clnt_recv_msg(struct work_struct *work)
 	int rc;
 
 	do {
-		IPAWANDBG_LOW("Notified about a Receive Event");
+		IPAWANDBG("Notified about a Receive Event");
 		rc = qmi_recv_msg(ipa_q6_clnt);
 	} while (rc == 0);
 	if (rc != -ENOMSG)
@@ -725,7 +717,7 @@ static void ipa_q6_clnt_notify(struct qmi_handle *handle,
 {
 	switch (event) {
 	case QMI_RECV_MSG:
-		IPAWANDBG_LOW("client qmi recv message called");
+		IPAWANDBG("client qmi recv message called");
 		if (!atomic_read(&workqueues_stopped))
 			queue_delayed_work(ipa_clnt_resp_workqueue,
 					   &work_recv_msg_client, 0);
@@ -1096,7 +1088,7 @@ int ipa_qmi_get_data_stats(struct ipa_get_data_stats_req_msg_v01 *req,
 	resp_desc.msg_id = QMI_IPA_GET_DATA_STATS_RESP_V01;
 	resp_desc.ei_array = ipa_get_data_stats_resp_msg_data_v01_ei;
 
-	IPAWANDBG_LOW("Sending QMI_IPA_GET_DATA_STATS_REQ_V01\n");
+	IPAWANDBG("Sending QMI_IPA_GET_DATA_STATS_REQ_V01\n");
 
 	rc = qmi_send_req_wait(ipa_q6_clnt, &req_desc, req,
 			sizeof(struct ipa_get_data_stats_req_msg_v01),
@@ -1104,7 +1096,7 @@ int ipa_qmi_get_data_stats(struct ipa_get_data_stats_req_msg_v01 *req,
 			sizeof(struct ipa_get_data_stats_resp_msg_v01),
 			QMI_SEND_STATS_REQ_TIMEOUT_MS);
 
-	IPAWANDBG_LOW("QMI_IPA_GET_DATA_STATS_RESP_V01 received\n");
+	IPAWANDBG("QMI_IPA_GET_DATA_STATS_RESP_V01 received\n");
 
 	return ipa_check_qmi_response(rc,
 		QMI_IPA_GET_DATA_STATS_REQ_V01, resp->resp.result,
@@ -1125,7 +1117,7 @@ int ipa_qmi_get_network_stats(struct ipa_get_apn_data_stats_req_msg_v01 *req,
 	resp_desc.msg_id = QMI_IPA_GET_APN_DATA_STATS_RESP_V01;
 	resp_desc.ei_array = ipa_get_apn_data_stats_resp_msg_data_v01_ei;
 
-	IPAWANDBG_LOW("Sending QMI_IPA_GET_APN_DATA_STATS_REQ_V01\n");
+	IPAWANDBG("Sending QMI_IPA_GET_APN_DATA_STATS_REQ_V01\n");
 
 	rc = qmi_send_req_wait(ipa_q6_clnt, &req_desc, req,
 			sizeof(struct ipa_get_apn_data_stats_req_msg_v01),
@@ -1133,7 +1125,7 @@ int ipa_qmi_get_network_stats(struct ipa_get_apn_data_stats_req_msg_v01 *req,
 			sizeof(struct ipa_get_apn_data_stats_resp_msg_v01),
 			QMI_SEND_STATS_REQ_TIMEOUT_MS);
 
-	IPAWANDBG_LOW("QMI_IPA_GET_APN_DATA_STATS_RESP_V01 received\n");
+	IPAWANDBG("QMI_IPA_GET_APN_DATA_STATS_RESP_V01 received\n");
 
 	return ipa_check_qmi_response(rc,
 		QMI_IPA_GET_APN_DATA_STATS_REQ_V01, resp->resp.result,
@@ -1157,14 +1149,14 @@ int ipa_qmi_set_data_quota(struct ipa_set_data_usage_quota_req_msg_v01 *req)
 	resp_desc.msg_id = QMI_IPA_SET_DATA_USAGE_QUOTA_RESP_V01;
 	resp_desc.ei_array = ipa_set_data_usage_quota_resp_msg_data_v01_ei;
 
-	IPAWANDBG_LOW("Sending QMI_IPA_SET_DATA_USAGE_QUOTA_REQ_V01\n");
+	IPAWANDBG("Sending QMI_IPA_SET_DATA_USAGE_QUOTA_REQ_V01\n");
 
 	rc = qmi_send_req_wait(ipa_q6_clnt, &req_desc, req,
 			sizeof(struct ipa_set_data_usage_quota_req_msg_v01),
 			&resp_desc, &resp, sizeof(resp),
 			QMI_SEND_STATS_REQ_TIMEOUT_MS);
 
-	IPAWANDBG_LOW("QMI_IPA_SET_DATA_USAGE_QUOTA_RESP_V01 received\n");
+	IPAWANDBG("QMI_IPA_SET_DATA_USAGE_QUOTA_RESP_V01 received\n");
 
 	return ipa_check_qmi_response(rc,
 		QMI_IPA_SET_DATA_USAGE_QUOTA_REQ_V01, resp.resp.result,
@@ -1191,13 +1183,13 @@ int ipa_qmi_stop_data_qouta(void)
 	resp_desc.msg_id = QMI_IPA_STOP_DATA_USAGE_QUOTA_RESP_V01;
 	resp_desc.ei_array = ipa_stop_data_usage_quota_resp_msg_data_v01_ei;
 
-	IPAWANDBG_LOW("Sending QMI_IPA_STOP_DATA_USAGE_QUOTA_REQ_V01\n");
+	IPAWANDBG("Sending QMI_IPA_STOP_DATA_USAGE_QUOTA_REQ_V01\n");
 
 	rc = qmi_send_req_wait(ipa_q6_clnt, &req_desc, &req, sizeof(req),
 		&resp_desc, &resp, sizeof(resp),
 		QMI_SEND_STATS_REQ_TIMEOUT_MS);
 
-	IPAWANDBG_LOW("QMI_IPA_STOP_DATA_USAGE_QUOTA_RESP_V01 received\n");
+	IPAWANDBG("QMI_IPA_STOP_DATA_USAGE_QUOTA_RESP_V01 received\n");
 
 	return ipa_check_qmi_response(rc,
 		QMI_IPA_STOP_DATA_USAGE_QUOTA_REQ_V01, resp.resp.result,

@@ -343,7 +343,7 @@ static void psb_intel_lvds_restore(struct drm_connector *connector)
 	}
 }
 
-enum drm_mode_status psb_intel_lvds_mode_valid(struct drm_connector *connector,
+int psb_intel_lvds_mode_valid(struct drm_connector *connector,
 				 struct drm_display_mode *mode)
 {
 	struct drm_psb_private *dev_priv = connector->dev->dev_private;
@@ -625,7 +625,7 @@ int psb_intel_lvds_set_property(struct drm_connector *connector,
 		else
                         gma_backlight_set(encoder->dev, value);
 	} else if (!strcmp(property->name, "DPMS")) {
-		const struct drm_encoder_helper_funcs *hfuncs
+		struct drm_encoder_helper_funcs *hfuncs
 						= encoder->helper_private;
 		hfuncs->dpms(encoder, value);
 	}

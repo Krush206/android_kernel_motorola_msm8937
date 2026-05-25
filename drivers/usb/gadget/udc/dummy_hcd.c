@@ -173,8 +173,6 @@ struct dummy_hcd {
 
 	struct usb_device		*udev;
 	struct list_head		urbp_list;
-	struct urbp			*next_frame_urbp;
-
 	u32				stream_en_ep;
 	u8				num_stream[30 / 2];
 
@@ -313,10 +311,11 @@ static void set_link_state_by_speed(struct dummy_hcd *dum_hcd)
 			     USB_PORT_STAT_CONNECTION) == 0)
 				dum_hcd->port_status |=
 					(USB_PORT_STAT_C_CONNECTION << 16);
-			if ((dum_hcd->port_status & USB_PORT_STAT_ENABLE) &&
-			    (dum_hcd->port_status &
-			     USB_PORT_STAT_LINK_STATE) == USB_SS_PORT_LS_U0 &&
-			    dum_hcd->rh_state != DUMMY_RH_SUSPENDED)
+			if ((dum_hcd->port_status &
+			     USB_PORT_STAT_ENABLE) == 1 &&
+				(dum_hcd->port_status &
+				 USB_SS_PORT_LS_U0) == 1 &&
+				dum_hcd->rh_state != DUMMY_RH_SUSPENDED)
 				dum_hcd->active = 1;
 		}
 	} else {
@@ -973,14 +972,11 @@ static int dummy_udc_probe(struct platform_device *pdev)
 	int		rc;
 
 	dum = *((void **)dev_get_platdata(&pdev->dev));
+	/* Clear usb_gadget region for new registration to udc-core */
+	memzero_explicit(&dum->gadget, sizeof(struct usb_gadget));
 	dum->gadget.name = gadget_name;
 	dum->gadget.ops = &dummy_ops;
-	if (mod_data.is_super_speed)
-		dum->gadget.max_speed = USB_SPEED_SUPER;
-	else if (mod_data.is_high_speed)
-		dum->gadget.max_speed = USB_SPEED_HIGH;
-	else
-		dum->gadget.max_speed = USB_SPEED_FULL;
+	dum->gadget.max_speed = USB_SPEED_SUPER;
 
 	dum->gadget.dev.parent = &pdev->dev;
 	init_dummy_udc_hw(dum);
@@ -1190,8 +1186,6 @@ static int dummy_urb_enqueue(
 
 	list_add_tail(&urbp->urbp_list, &dum_hcd->urbp_list);
 	urb->hcpriv = urbp;
-	if (!dum_hcd->next_frame_urbp)
-		dum_hcd->next_frame_urbp = urbp;
 	if (usb_pipetype(urb->pipe) == PIPE_CONTROL)
 		urb->error_count = 1;		/* mark as a new urb */
 
@@ -1695,7 +1689,6 @@ static void dummy_timer(unsigned long _dum_hcd)
 		spin_unlock_irqrestore(&dum->lock, flags);
 		return;
 	}
-	dum_hcd->next_frame_urbp = NULL;
 
 	for (i = 0; i < DUMMY_ENDPOINTS; i++) {
 		if (!ep_name[i])
@@ -1711,10 +1704,6 @@ restart:
 		struct dummy_ep		*ep = NULL;
 		int			type;
 		int			status = -EINPROGRESS;
-
-		/* stop when we reach URBs queued after the timer interrupt */
-		if (urbp == dum_hcd->next_frame_urbp)
-			break;
 
 		urb = urbp->urb;
 		if (urb->unlinked)
@@ -1946,7 +1935,7 @@ ss_hub_descriptor(struct usb_hub_descriptor *desc)
 	desc->wHubCharacteristics = cpu_to_le16(0x0001);
 	desc->bNbrPorts = 1;
 	desc->u.ss.bHubHdrDecLat = 0x04; /* Worst case: 0.4 micro sec*/
-	desc->u.ss.DeviceRemovable = 0xffff;
+	desc->u.ss.DeviceRemovable = 0;
 }
 
 static inline void hub_descriptor(struct usb_hub_descriptor *desc)
@@ -1956,8 +1945,8 @@ static inline void hub_descriptor(struct usb_hub_descriptor *desc)
 	desc->bDescLength = 9;
 	desc->wHubCharacteristics = cpu_to_le16(0x0001);
 	desc->bNbrPorts = 1;
-	desc->u.hs.DeviceRemovable[0] = 0xff;
-	desc->u.hs.DeviceRemovable[1] = 0xff;
+	desc->u.hs.DeviceRemovable[0] = 0;
+	desc->u.hs.DeviceRemovable[1] = 0xff;	/* PortPwrCtrlMask */
 }
 
 static int dummy_hub_control(
@@ -1998,13 +1987,16 @@ static int dummy_hub_control(
 			}
 			break;
 		case USB_PORT_FEAT_POWER:
-			dev_dbg(dummy_dev(dum_hcd), "power-off\n");
-			if (hcd->speed == HCD_USB3)
-				dum_hcd->port_status &= ~USB_SS_PORT_STAT_POWER;
-			else
-				dum_hcd->port_status &= ~USB_PORT_STAT_POWER;
-			set_link_state(dum_hcd);
-			break;
+			if (hcd->speed == HCD_USB3) {
+				if (dum_hcd->port_status & USB_PORT_STAT_POWER)
+					dev_dbg(dummy_dev(dum_hcd),
+						"power-off\n");
+			} else
+				if (dum_hcd->port_status &
+							USB_SS_PORT_STAT_POWER)
+					dev_dbg(dummy_dev(dum_hcd),
+						"power-off\n");
+			/* FALLS THROUGH */
 		default:
 			dum_hcd->port_status &= ~(1 << wValue);
 			set_link_state(dum_hcd);
@@ -2175,13 +2167,14 @@ static int dummy_hub_control(
 				if ((dum_hcd->port_status &
 				     USB_SS_PORT_STAT_POWER) != 0) {
 					dum_hcd->port_status |= (1 << wValue);
+					set_link_state(dum_hcd);
 				}
 			} else
 				if ((dum_hcd->port_status &
 				     USB_PORT_STAT_POWER) != 0) {
 					dum_hcd->port_status |= (1 << wValue);
+					set_link_state(dum_hcd);
 				}
-			set_link_state(dum_hcd);
 		}
 		break;
 	case GetPortErrorCount:
@@ -2499,6 +2492,8 @@ static struct hc_driver dummy_hcd = {
 	.product_desc =		"Dummy host controller",
 	.hcd_priv_size =	sizeof(struct dummy_hcd),
 
+	.flags =		HCD_USB3 | HCD_SHARED,
+
 	.reset =		dummy_setup,
 	.start =		dummy_start,
 	.stop =			dummy_stop,
@@ -2527,12 +2522,8 @@ static int dummy_hcd_probe(struct platform_device *pdev)
 	dev_info(&pdev->dev, "%s, driver " DRIVER_VERSION "\n", driver_desc);
 	dum = *((void **)dev_get_platdata(&pdev->dev));
 
-	if (mod_data.is_super_speed)
-		dummy_hcd.flags = HCD_USB3 | HCD_SHARED;
-	else if (mod_data.is_high_speed)
+	if (!mod_data.is_super_speed)
 		dummy_hcd.flags = HCD_USB2;
-	else
-		dummy_hcd.flags = HCD_USB11;
 	hs_hcd = usb_create_hcd(&dummy_hcd, &pdev->dev, dev_name(&pdev->dev));
 	if (!hs_hcd)
 		return -ENOMEM;

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,6 @@
 #include <linux/ipc_logging.h>
 #include <linux/ipa.h>
 #include <linux/ipa_uc_offload.h>
-#include <linux/ipa_wdi3.h>
 
 #define __FILENAME__ \
 	(strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -297,13 +296,11 @@ struct ipa_mhi_connect_params_internal {
  * @link: entry's link in global header offset entries list
  * @offset: the offset
  * @bin: bin
- * @ipacm_installed: indicate if installed by ipacm
  */
 struct ipa_hdr_offset_entry {
 	struct list_head link;
 	u32 offset;
 	u32 bin;
-	bool ipacm_installed;
 };
 
 extern const char *ipa_clients_strings[];
@@ -375,20 +372,6 @@ int ipa_setup_uc_ntn_pipes(struct ipa_ntn_conn_in_params *in,
 	struct ipa_ntn_conn_out_params *outp);
 
 int ipa_tear_down_uc_offload_pipes(int ipa_ep_idx_ul, int ipa_ep_idx_dl);
-int ipa_ntn_uc_reg_rdyCB(void (*ipauc_ready_cb)(void *user_data),
-			      void *user_data);
-void ipa_ntn_uc_dereg_rdyCB(void);
-
-int ipa_conn_wdi3_pipes(struct ipa_wdi3_conn_in_params *in,
-	struct ipa_wdi3_conn_out_params *out);
-
-int ipa_disconn_wdi3_pipes(int ipa_ep_idx_tx, int ipa_ep_idx_rx);
-
-int ipa_enable_wdi3_pipes(int ipa_ep_idx_tx, int ipa_ep_idx_rx);
-
-int ipa_disable_wdi3_pipes(int ipa_ep_idx_tx, int ipa_ep_idx_rx);
-
 const char *ipa_get_version_string(enum ipa_hw_type ver);
-int ipa_start_gsi_channel(u32 clnt_hdl);
 
 #endif /* _IPA_COMMON_I_H_ */

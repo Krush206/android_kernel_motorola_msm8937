@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2018 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2016 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -18,11 +18,6 @@
 #include <linux/cpu.h>
 #include <linux/moduleparam.h>
 #include <linux/debugfs.h>
-#include <linux/sched.h>	/* local_clock */
-#include <linux/version.h>
-#if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
-#include <linux/sched/clock.h>	/* local_clock */
-#endif
 #include <linux/uaccess.h>
 
 #include "public/mc_user.h"
@@ -119,7 +114,7 @@ struct smc_log_entry {
 	struct mc_fc_as_in as_in;
 };
 
-#define SMC_LOG_SIZE 1024
+#define SMC_LOG_SIZE 256
 static struct smc_log_entry smc_log[SMC_LOG_SIZE];
 static int smc_log_index;
 
@@ -212,30 +207,28 @@ static inline int _smc(union mc_fc_generic *mc_fc_generic)
 static int active_cpu;
 
 #ifdef MC_FASTCALL_WORKER_THREAD
-static int mc_cpu_offline(int cpu)
+static void mc_cpu_offline(int cpu)
 {
 	int i;
 
 	if (active_cpu != cpu) {
 		mc_dev_devel("not active CPU, no action taken");
-		return 0;
+		return;
 	}
 
 	/* Chose the first online CPU and switch! */
 	for_each_online_cpu(i) {
 		if (cpu != i) {
-			mc_dev_info("CPU %d is dying, switching to %d",
-				    cpu, i);
-			return mc_switch_core(i);
+			mc_dev_devel("CPU %d is dying, switching to %d",
+				     cpu, i);
+			mc_switch_core(i);
+			break;
 		}
 
 		mc_dev_devel("Skipping CPU %d", cpu);
 	}
-
-	return 0;
 }
 
-#if KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE
 static int mobicore_cpu_callback(struct notifier_block *nfb,
 				 unsigned long action, void *hcpu)
 {
@@ -244,8 +237,12 @@ static int mobicore_cpu_callback(struct notifier_block *nfb,
 	switch (action) {
 	case CPU_DOWN_PREPARE:
 	case CPU_DOWN_PREPARE_FROZEN:
-		mc_dev_devel("Cpu %d is going to die", cpu);
+		mc_dev_info("Cpu %d is going to die", cpu);
 		mc_cpu_offline(cpu);
+		break;
+	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
+		mc_dev_info("Cpu %d is dead", cpu);
 		break;
 	}
 	return NOTIFY_OK;
@@ -254,13 +251,6 @@ static int mobicore_cpu_callback(struct notifier_block *nfb,
 static struct notifier_block mobicore_cpu_notifer = {
 	.notifier_call = mobicore_cpu_callback,
 };
-#else
-static int nq_cpu_down_prep(unsigned int cpu)
-{
-	mc_dev_info("CPU #%d is going to die", cpu);
-	return mc_cpu_offline(cpu);
-}
-#endif
 #endif /* MC_FASTCALL_WORKER_THREAD */
 
 static cpumask_t mc_exec_core_switch(union mc_fc_generic *mc_fc_generic)
@@ -305,23 +295,8 @@ static ssize_t debug_coreswitch_write(struct file *file,
 	return buffer_len;
 }
 
-static ssize_t debug_coreswitch_read(struct file *file, char __user *buffer,
-				     size_t buffer_len, loff_t *ppos)
-{
-	char cpu_str[8];
-	int ret = 0;
-
-	ret = snprintf(cpu_str, sizeof(cpu_str), "%d\n", mc_active_core());
-	if (ret < 0)
-		return -EINVAL;
-
-	return simple_read_from_buffer(buffer, buffer_len, ppos,
-				       cpu_str, ret);
-}
-
 static const struct file_operations mc_debug_coreswitch_ops = {
 	.write = debug_coreswitch_write,
-	.read = debug_coreswitch_read,
 };
 #else /* TBASE_CORE_SWITCHER */
 static inline cpumask_t mc_exec_core_switch(union mc_fc_generic *mc_fc_generic)
@@ -329,18 +304,6 @@ static inline cpumask_t mc_exec_core_switch(union mc_fc_generic *mc_fc_generic)
 	return CPU_MASK_CPU0;
 }
 #endif /* !TBASE_CORE_SWITCHER */
-
-#ifdef MC_SMC_FASTCALL
-static inline int nq_set_cpus_allowed(struct task_struct *p, cpumask_t new_mask)
-{
-	return 0;
-}
-#else /* MC_SMC_FASTCALL */
-static inline int nq_set_cpus_allowed(struct task_struct *p, cpumask_t new_mask)
-{
-	return set_cpus_allowed_ptr(p, &new_mask);
-}
-#endif /* ! MC_SMC_FASTCALL */
 
 #ifdef MC_FASTCALL_WORKER_THREAD
 static void fastcall_work_func(struct kthread_work *work)
@@ -361,7 +324,7 @@ static void fastcall_work_func(struct work_struct *work)
 #ifdef MC_FASTCALL_WORKER_THREAD
 		cpumask_t new_msk = mc_exec_core_switch(mc_fc_generic);
 
-		nq_set_cpus_allowed(fastcall_thread, new_msk);
+		set_cpus_allowed(fastcall_thread, new_msk);
 #else
 		mc_exec_core_switch(mc_fc_generic);
 #endif
@@ -380,19 +343,11 @@ static bool mc_fastcall(void *data)
 		.data = data,
 	};
 
-#if KERNEL_VERSION(4, 9, 0) <= LINUX_VERSION_CODE
-	if (!kthread_queue_work(&fastcall_worker, &fc_work.work))
-		return false;
-
-	/* If work is queued or executing, wait for it to finish execution */
-	kthread_flush_work(&fc_work.work);
-#else
 	if (!queue_kthread_work(&fastcall_worker, &fc_work.work))
 		return false;
 
 	/* If work is queued or executing, wait for it to finish execution */
 	flush_kthread_work(&fc_work.work);
-#endif
 #else
 	struct fastcall_work fc_work = {
 		.data = data,
@@ -425,28 +380,17 @@ int mc_fastcall_init(void)
 	}
 
 	/* this thread MUST run on CPU 0 at startup */
-	nq_set_cpus_allowed(fastcall_thread, CPU_MASK_CPU0);
+	set_cpus_allowed(fastcall_thread, CPU_MASK_CPU0);
 
 	wake_up_process(fastcall_thread);
 #ifdef TBASE_CORE_SWITCHER
-#if KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE
 	ret = register_cpu_notifier(&mobicore_cpu_notifer);
-#else
-	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
-					"tee/trustonic:online",
-					NULL, nq_cpu_down_prep);
-#endif
-	if (ret < 0) {
-		mc_dev_err("cpu online callback setup failed: %d", ret);
-		return ret;
-	}
-
 	/* Create debugfs structs entry */
 	debugfs_create_file("active_cpu", 0600, g_ctx.debug_dir, NULL,
 			    &mc_debug_coreswitch_ops);
 #endif
 #endif /* MC_FASTCALL_WORKER_THREAD */
-	return 0;
+	return ret;
 }
 
 void mc_fastcall_exit(void)
@@ -454,11 +398,7 @@ void mc_fastcall_exit(void)
 #ifdef MC_FASTCALL_WORKER_THREAD
 	if (!IS_ERR_OR_NULL(fastcall_thread)) {
 #ifdef TBASE_CORE_SWITCHER
-#if KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE
 		unregister_cpu_notifier(&mobicore_cpu_notifer);
-#else
-		cpuhp_remove_state_nocalls(CPUHP_AP_ONLINE_DYN);
-#endif
 #endif
 		kthread_stop(fastcall_thread);
 		fastcall_thread = NULL;
@@ -559,15 +499,13 @@ int mc_fc_mem_trace(phys_addr_t buffer, u32 size)
 	return convert_fc_ret(mc_fc_generic.as_out.ret);
 }
 
-int mc_fc_nsiq(u32 sid, u32 payload)
+int mc_fc_nsiq(void)
 {
 	union mc_fc_generic fc;
 	int ret;
 
 	memset(&fc, 0, sizeof(fc));
 	fc.as_in.cmd = MC_SMC_N_SIQ;
-	fc.as_in.param[1] = sid;
-	fc.as_in.param[2] = payload;
 	mc_fastcall(&fc);
 	ret = convert_fc_ret(fc.as_out.ret);
 	if (ret)
@@ -576,14 +514,13 @@ int mc_fc_nsiq(u32 sid, u32 payload)
 	return ret;
 }
 
-int mc_fc_yield(u32 timeslice)
+int mc_fc_yield(void)
 {
 	union mc_fc_generic fc;
 	int ret;
 
 	memset(&fc, 0, sizeof(fc));
 	fc.as_in.cmd = MC_SMC_N_YIELD;
-	fc.as_in.param[1] = timeslice;
 	mc_fastcall(&fc);
 	ret = convert_fc_ret(fc.as_out.ret);
 	if (ret)
@@ -642,9 +579,6 @@ int mc_switch_core(int cpu)
 {
 	s32 ret = 0;
 	union mc_fc_swich_core fc_switch_core;
-
-	if (cpu >= nr_cpu_ids)
-		return -EINVAL;
 
 	if (!cpu_online(cpu))
 		return 1;

@@ -76,7 +76,6 @@
 #include <linux/printk.h>
 #include <linux/cgroup.h>
 #include <linux/cpuset.h>
-#include <linux/cpufreq.h>
 #include <linux/audit.h>
 #include <linux/poll.h>
 #include <linux/nsproxy.h>
@@ -94,8 +93,6 @@
 #include <trace/events/oom.h>
 #include "internal.h"
 #include "fd.h"
-
-#include "../../lib/kstrtox.h"
 
 /* NOTE:
  *	Implementing inode permission operations in /proc is almost
@@ -279,20 +276,6 @@ static int proc_pid_stack(struct seq_file *m, struct pid_namespace *ns,
 	unsigned long *entries;
 	int err;
 	int i;
-
-	/*
-	 * The ability to racily run the kernel stack unwinder on a running task
-	 * and then observe the unwinder output is scary; while it is useful for
-	 * debugging kernel issues, it can also allow an attacker to leak kernel
-	 * stack contents.
-	 * Doing this in a manner that is at least safe from races would require
-	 * some work to ensure that the remote task can not be scheduled; and
-	 * even then, this would still expose the unwinder as local attack
-	 * surface.
-	 * Therefore, this interface is restricted to root.
-	 */
-	if (!file_ns_capable(m->file, &init_user_ns, CAP_SYS_ADMIN))
-		return -EACCES;
 
 	entries = kmalloc(MAX_STACK_TRACE_DEPTH * sizeof(*entries), GFP_KERNEL);
 	if (!entries)
@@ -1868,33 +1851,8 @@ end_instantiate:
 static int dname_to_vma_addr(struct dentry *dentry,
 			     unsigned long *start, unsigned long *end)
 {
-	const char *str = dentry->d_name.name;
-	unsigned long long sval, eval;
-	unsigned int len;
-
-	len = _parse_integer(str, 16, &sval);
-	if (len & KSTRTOX_OVERFLOW)
+	if (sscanf(dentry->d_name.name, "%lx-%lx", start, end) != 2)
 		return -EINVAL;
-	if (sval != (unsigned long)sval)
-		return -EINVAL;
-	str += len;
-
-	if (*str != '-')
-		return -EINVAL;
-	str++;
-
-	len = _parse_integer(str, 16, &eval);
-	if (len & KSTRTOX_OVERFLOW)
-		return -EINVAL;
-	if (eval != (unsigned long)eval)
-		return -EINVAL;
-	str += len;
-
-	if (*str != '\0')
-		return -EINVAL;
-
-	*start = sval;
-	*end = eval;
 
 	return 0;
 }
@@ -2836,12 +2794,11 @@ static const struct pid_entry tgid_base_stuff[] = {
 	REG("mountinfo",  S_IRUGO, proc_mountinfo_operations),
 	REG("mountstats", S_IRUSR, proc_mountstats_operations),
 #ifdef CONFIG_PROCESS_RECLAIM
-	REG("reclaim", 0222, proc_reclaim_operations),
+	REG("reclaim", S_IWUSR, proc_reclaim_operations),
 #endif
 #ifdef CONFIG_PROC_PAGE_MONITOR
 	REG("clear_refs", S_IWUSR, proc_clear_refs_operations),
 	REG("smaps",      S_IRUGO, proc_pid_smaps_operations),
-	REG("smaps_rollup", S_IRUGO, proc_pid_smaps_rollup_operations),
 	REG("pagemap",    S_IRUSR, proc_pagemap_operations),
 #endif
 #ifdef CONFIG_SECURITY
@@ -2851,7 +2808,7 @@ static const struct pid_entry tgid_base_stuff[] = {
 	ONE("wchan",      S_IRUGO, proc_pid_wchan),
 #endif
 #ifdef CONFIG_STACKTRACE
-	ONE("stack",      S_IRUGO, proc_pid_stack),
+	ONE("stack",      S_IRUSR, proc_pid_stack),
 #endif
 #ifdef CONFIG_SCHEDSTATS
 	ONE("schedstat",  S_IRUGO, proc_pid_schedstat),
@@ -2866,8 +2823,8 @@ static const struct pid_entry tgid_base_stuff[] = {
 	ONE("cgroup",  S_IRUGO, proc_cgroup_show),
 #endif
 	ONE("oom_score",  S_IRUGO, proc_oom_score),
-	REG("oom_adj",    S_IRUGO|S_IWUSR, proc_oom_adj_operations),
-	REG("oom_score_adj", S_IRUGO|S_IWUSR, proc_oom_score_adj_operations),
+	REG("oom_adj",    S_IRUSR, proc_oom_adj_operations),
+	REG("oom_score_adj", S_IRUSR, proc_oom_score_adj_operations),
 #ifdef CONFIG_AUDITSYSCALL
 	REG("loginuid",   S_IWUSR|S_IRUGO, proc_loginuid_operations),
 	REG("sessionid",  S_IRUGO, proc_sessionid_operations),
@@ -2892,9 +2849,6 @@ static const struct pid_entry tgid_base_stuff[] = {
 #endif
 #ifdef CONFIG_CHECKPOINT_RESTORE
 	REG("timers",	  S_IRUGO, proc_timers_operations),
-#endif
-#ifdef CONFIG_CPU_FREQ_STAT
-	ONE("time_in_state", 0444, proc_time_in_state_show),
 #endif
 };
 
@@ -3150,44 +3104,6 @@ int proc_pid_readdir(struct file *file, struct dir_context *ctx)
 }
 
 /*
- * proc_tid_comm_permission is a special permission function exclusively
- * used for the node /proc/<pid>/task/<tid>/comm.
- * It bypasses generic permission checks in the case where a task of the same
- * task group attempts to access the node.
- * The rational behind this is that glibc and bionic access this node for
- * cross thread naming (pthread_set/getname_np(!self)). However, if
- * PR_SET_DUMPABLE gets set to 0 this node among others becomes uid=0 gid=0,
- * which locks out the cross thread naming implementation.
- * This function makes sure that the node is always accessible for members of
- * same thread group.
- */
-static int proc_tid_comm_permission(struct inode *inode, int mask)
-{
-	bool is_same_tgroup;
-	struct task_struct *task;
-
-	task = get_proc_task(inode);
-	if (!task)
-		return -ESRCH;
-	is_same_tgroup = same_thread_group(current, task);
-	put_task_struct(task);
-
-	if (likely(is_same_tgroup && !(mask & MAY_EXEC))) {
-		/* This file (/proc/<pid>/task/<tid>/comm) can always be
-		 * read or written by the members of the corresponding
-		 * thread group.
-		 */
-		return 0;
-	}
-
-	return generic_permission(inode, mask);
-}
-
-static const struct inode_operations proc_tid_comm_inode_operations = {
-		.permission = proc_tid_comm_permission,
-};
-
-/*
  * Tasks
  */
 static const struct pid_entry tid_base_stuff[] = {
@@ -3205,9 +3121,7 @@ static const struct pid_entry tid_base_stuff[] = {
 #ifdef CONFIG_SCHED_DEBUG
 	REG("sched",     S_IRUGO|S_IWUSR, proc_pid_sched_operations),
 #endif
-	NOD("comm",      S_IFREG|S_IRUGO|S_IWUSR,
-			 &proc_tid_comm_inode_operations,
-			 &proc_pid_set_comm_operations, {}),
+	REG("comm",      S_IRUGO|S_IWUSR, proc_pid_set_comm_operations),
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
 	ONE("syscall",   S_IRUSR, proc_pid_syscall),
 #endif
@@ -3230,7 +3144,6 @@ static const struct pid_entry tid_base_stuff[] = {
 #ifdef CONFIG_PROC_PAGE_MONITOR
 	REG("clear_refs", S_IWUSR, proc_clear_refs_operations),
 	REG("smaps",     S_IRUGO, proc_tid_smaps_operations),
-	REG("smaps_rollup", S_IRUGO, proc_pid_smaps_rollup_operations),
 	REG("pagemap",    S_IRUSR, proc_pagemap_operations),
 #endif
 #ifdef CONFIG_SECURITY
@@ -3240,7 +3153,7 @@ static const struct pid_entry tid_base_stuff[] = {
 	ONE("wchan",     S_IRUGO, proc_pid_wchan),
 #endif
 #ifdef CONFIG_STACKTRACE
-	ONE("stack",      S_IRUGO, proc_pid_stack),
+	ONE("stack",      S_IRUSR, proc_pid_stack),
 #endif
 #ifdef CONFIG_SCHEDSTATS
 	ONE("schedstat", S_IRUGO, proc_pid_schedstat),
@@ -3255,8 +3168,8 @@ static const struct pid_entry tid_base_stuff[] = {
 	ONE("cgroup",  S_IRUGO, proc_cgroup_show),
 #endif
 	ONE("oom_score", S_IRUGO, proc_oom_score),
-	REG("oom_adj",   S_IRUGO|S_IWUSR, proc_oom_adj_operations),
-	REG("oom_score_adj", S_IRUGO|S_IWUSR, proc_oom_score_adj_operations),
+	REG("oom_adj",   S_IRUSR, proc_oom_adj_operations),
+	REG("oom_score_adj", S_IRUSR, proc_oom_score_adj_operations),
 #ifdef CONFIG_AUDITSYSCALL
 	REG("loginuid",  S_IWUSR|S_IRUGO, proc_loginuid_operations),
 	REG("sessionid",  S_IRUGO, proc_sessionid_operations),
@@ -3275,9 +3188,6 @@ static const struct pid_entry tid_base_stuff[] = {
 	REG("gid_map",    S_IRUGO|S_IWUSR, proc_gid_map_operations),
 	REG("projid_map", S_IRUGO|S_IWUSR, proc_projid_map_operations),
 	REG("setgroups",  S_IRUGO|S_IWUSR, proc_setgroups_operations),
-#endif
-#ifdef CONFIG_CPU_FREQ_STAT
-	ONE("time_in_state", 0444, proc_time_in_state_show),
 #endif
 };
 

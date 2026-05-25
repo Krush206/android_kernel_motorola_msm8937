@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -30,7 +30,6 @@
 #define SCM_SVC_SMMU_PROGRAM		0x15
 #define SCM_SVC_QDSS			0x16
 #define SCM_SVC_TZSCHEDULER		0xFC
-#define SCM_SVC_BW			0xFD
 
 #define SCM_FUSE_READ			0x7
 #define SCM_CMD_HDCP			0x01
@@ -101,8 +100,6 @@ extern int scm_call(u32 svc_id, u32 cmd_id, const void *cmd_buf, size_t cmd_len,
 
 extern int scm_call2(u32 cmd_id, struct scm_desc *desc);
 
-extern int scm_call2_noretry(u32 cmd_id, struct scm_desc *desc);
-
 extern int scm_call2_atomic(u32 cmd_id, struct scm_desc *desc);
 
 extern int scm_call_noalloc(u32 svc_id, u32 cmd_id, const void *cmd_buf,
@@ -148,11 +145,6 @@ static inline int scm_call(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 }
 
 static inline int scm_call2(u32 cmd_id, struct scm_desc *desc)
-{
-	return 0;
-}
-
-static inline int scm_call2_noretry(u32 cmd_id, struct scm_desc *desc)
 {
 	return 0;
 }

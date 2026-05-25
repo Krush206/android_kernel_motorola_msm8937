@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -438,7 +438,7 @@ static int mdss_mdp_get_ubwc_plane_size(struct mdss_mdp_format_params *fmt,
 			uv_bpp_numer = 2;
 			y_bpp_denom = 1;
 			uv_bpp_denom = 1;
-		} else { // fmt->format == MDP_Y_CBCR_H2V2_TP10_UBWC
+		} else if (fmt->format == MDP_Y_CBCR_H2V2_TP10_UBWC) {
 			y_stride_alignment = 192;
 			uv_stride_alignment = 96;
 			y_height_alignment = 16;
@@ -515,12 +515,11 @@ int mdss_mdp_get_plane_sizes(struct mdss_mdp_format_params *fmt, u32 w, u32 h,
 	if (ps == NULL)
 		return -EINVAL;
 
-	memset(ps, 0, sizeof(struct mdss_mdp_plane_sizes));
-
 	if ((w > MAX_IMG_WIDTH) || (h > MAX_IMG_HEIGHT))
 		return -ERANGE;
 
 	bpp = fmt->bpp;
+	memset(ps, 0, sizeof(struct mdss_mdp_plane_sizes));
 
 	if (mdss_mdp_is_ubwc_format(fmt)) {
 		rc = mdss_mdp_get_ubwc_plane_size(fmt, w, h, ps);

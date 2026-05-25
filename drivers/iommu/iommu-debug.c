@@ -72,8 +72,6 @@ static const char *iommu_debug_attr_to_string(enum iommu_attr attr)
 		return "DOMAIN_ATTR_S1_BYPASS";
 	case DOMAIN_ATTR_FAST:
 		return "DOMAIN_ATTR_FAST";
-	case DOMAIN_ATTR_EARLY_MAP:
-		return "DOMAIN_ATTR_EARLY_MAP";
 	default:
 		return "Unknown attr!";
 	}
@@ -1477,7 +1475,7 @@ static ssize_t iommu_debug_unmap_write(struct file *file,
 				       const char __user *ubuf,
 				       size_t count, loff_t *offset)
 {
-	ssize_t retval = -EINVAL;
+	ssize_t retval;
 	char *comma1;
 	char buf[100];
 	dma_addr_t iova;

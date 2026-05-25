@@ -79,7 +79,7 @@ ext4_unaligned_aio(struct inode *inode, struct iov_iter *from, loff_t pos)
 	struct super_block *sb = inode->i_sb;
 	int blockmask = sb->s_blocksize - 1;
 
-	if (pos >= ALIGN(i_size_read(inode), sb->s_blocksize))
+	if (pos >= i_size_read(inode))
 		return 0;
 
 	if ((pos | iov_iter_alignment(from)) & blockmask)
@@ -200,15 +200,6 @@ static const struct vm_operations_struct ext4_file_vm_ops = {
 
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	struct inode *inode = file->f_mapping->host;
-
-	if (ext4_encrypted_inode(inode)) {
-		int err = ext4_get_encryption_info(inode);
-		if (err)
-			return 0;
-		if (ext4_encryption_info(inode) == NULL)
-			return -ENOKEY;
-	}
 	file_accessed(file);
 	vma->vm_ops = &ext4_file_vm_ops;
 	return 0;
@@ -221,7 +212,6 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	struct vfsmount *mnt = filp->f_path.mnt;
 	struct path path;
 	char buf[64], *cp;
-	int ret;
 
 	if (unlikely(!(sbi->s_mount_flags & EXT4_MF_MNTDIR_SAMPLED) &&
 		     !(sb->s_flags & MS_RDONLY))) {
@@ -255,19 +245,12 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 			ext4_journal_stop(handle);
 		}
 	}
-	if (ext4_encrypted_inode(inode)) {
-		ret = ext4_get_encryption_info(inode);
-		if (ret)
-			return -EACCES;
-		if (ext4_encryption_info(inode) == NULL)
-			return -ENOKEY;
-	}
 	/*
 	 * Set up the jbd2_inode if we are opening the inode for
 	 * writing and the journal is present
 	 */
 	if (filp->f_mode & FMODE_WRITE) {
-		ret = ext4_inode_attach_jinode(inode);
+		int ret = ext4_inode_attach_jinode(inode);
 		if (ret < 0)
 			return ret;
 	}
@@ -317,7 +300,7 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 		int i, num;
 		unsigned long nr_pages;
 
-		num = min_t(pgoff_t, end - index, PAGEVEC_SIZE - 1) + 1;
+		num = min_t(pgoff_t, end - index, PAGEVEC_SIZE);
 		nr_pages = pagevec_lookup(&pvec, inode->i_mapping, index,
 					  (pgoff_t)num);
 		if (nr_pages == 0)
@@ -357,8 +340,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 				lastoff = page_offset(page);
 				bh = head = page_buffers(page);
 				do {
-					if (lastoff + bh->b_size <= startoff)
-						goto next;
 					if (buffer_uptodate(bh) ||
 					    buffer_unwritten(bh)) {
 						if (whence == SEEK_DATA)
@@ -373,7 +354,6 @@ static int ext4_find_unwritten_pgoff(struct inode *inode,
 						unlock_page(page);
 						goto out;
 					}
-next:
 					lastoff += bh->b_size;
 					bh = bh->b_this_page;
 				} while (bh != head);
@@ -416,7 +396,7 @@ static loff_t ext4_seek_data(struct file *file, loff_t offset, loff_t maxsize)
 	mutex_lock(&inode->i_mutex);
 
 	isize = i_size_read(inode);
-	if (offset < 0 || offset >= isize) {
+	if (offset >= isize) {
 		mutex_unlock(&inode->i_mutex);
 		return -ENXIO;
 	}
@@ -489,7 +469,7 @@ static loff_t ext4_seek_hole(struct file *file, loff_t offset, loff_t maxsize)
 	mutex_lock(&inode->i_mutex);
 
 	isize = i_size_read(inode);
-	if (offset < 0 || offset >= isize) {
+	if (offset >= isize) {
 		mutex_unlock(&inode->i_mutex);
 		return -ENXIO;
 	}

@@ -845,5 +845,3 @@
 
 /delete-node/ &hsuart_active;
 /delete-node/ &hsuart_sleep;
-/delete-node/ &blsp2_uart0_active;
-/delete-node/ &blsp2_uart0_sleep;

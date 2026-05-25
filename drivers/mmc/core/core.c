@@ -33,7 +33,6 @@
 #include <linux/pm.h>
 #include <linux/jiffies.h>
 
-#define CREATE_TRACE_POINTS
 #include <trace/events/mmc.h>
 
 #include <linux/mmc/card.h>
@@ -50,11 +49,6 @@
 #include "mmc_ops.h"
 #include "sd_ops.h"
 #include "sdio_ops.h"
-
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_erase_start);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_erase_end);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_rw_start);
-EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_rw_end);
 
 /* If the device is not responding */
 #define MMC_CORE_TIMEOUT_MS	(10 * 60 * 1000) /* 10 minute timeout */
@@ -794,15 +788,10 @@ int mmc_resume_clk_scaling(struct mmc_host *host)
 	if (!mmc_can_scale_clk(host))
 		return 0;
 
-	/*
-	 * If clock scaling is already exited when resume is called, like
-	 * during mmc shutdown, it is not an error and should not fail the
-	 * API calling this.
-	 */
 	if (!host->clk_scaling.devfreq) {
-		pr_warn("%s: %s: no devfreq is assosiated with this device\n",
+		pr_err("%s: %s: no devfreq is assosiated with this device\n",
 			mmc_hostname(host), __func__);
-		return 0;
+		return -EPERM;
 	}
 
 	atomic_set(&host->clk_scaling.devfreq_abort, 0);
@@ -961,21 +950,6 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 
 EXPORT_SYMBOL(mmc_request_done);
 
-static void __mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
-{
-	int err;
-
-	/* Assumes host controller has been runtime resumed by mmc_claim_host */
-	err = mmc_retune(host);
-	if (err) {
-		mrq->cmd->error = err;
-		mmc_request_done(host, mrq);
-		return;
-	}
-
-	host->ops->request(host, mrq);
-}
-
 static void
 mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 {
@@ -983,7 +957,6 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 	unsigned int i, sz;
 	struct scatterlist *sg;
 #endif
-	mmc_retune_hold(host);
 
 	if (mrq->sbc) {
 		pr_debug("<%s: starting CMD%u arg %08x flags %08x>\n",
@@ -1048,7 +1021,7 @@ mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 		mmc_clk_scaling_start_busy(host, true);
 	}
 
-	__mmc_start_request(host, mrq);
+	host->ops->request(host, mrq);
 }
 
 static void mmc_start_cmdq_request(struct mmc_host *host,
@@ -1369,22 +1342,22 @@ static int mmc_wait_for_data_req_done(struct mmc_host *host,
 							    host->areq);
 				break; /* return err */
 			} else {
-				mmc_retune_recheck(host);
 				pr_info("%s: req failed (CMD%u): %d, retrying...\n",
 					mmc_hostname(host),
 					cmd->opcode, cmd->error);
 				cmd->retries--;
 				cmd->error = 0;
-				__mmc_start_request(host, mrq);
+				host->ops->request(host, mrq);
 				continue; /* wait for done/new event again */
 			}
 		} else if (context_info->is_new_req) {
 			context_info->is_new_req = false;
-			if (!next_req)
-				return MMC_BLK_NEW_REQUEST;
+			if (!next_req) {
+				err = MMC_BLK_NEW_REQUEST;
+				break; /* return err */
+			}
 		}
 	}
-	mmc_retune_release(host);
 	return err;
 }
 
@@ -1419,16 +1392,12 @@ static void mmc_wait_for_req_done(struct mmc_host *host,
 		    mmc_card_removed(host->card))
 			break;
 
-		mmc_retune_recheck(host);
-
 		pr_debug("%s: req failed (CMD%u): %d, retrying...\n",
 			 mmc_hostname(host), cmd->opcode, cmd->error);
 		cmd->retries--;
 		cmd->error = 0;
-		__mmc_start_request(host, mrq);
+		host->ops->request(host, mrq);
 	}
-
-	mmc_retune_release(host);
 }
 
 /**
@@ -1934,7 +1903,7 @@ void mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card)
 	/*
 	 * Some cards require longer data read timeout than indicated in CSD.
 	 * Address this by setting the read timeout to a "reasonably high"
-	 * value. For the cards tested, 300ms has proven enough. If necessary,
+	 * value. For the cards tested, 600ms has proven enough. If necessary,
 	 * this value can be increased if other problematic cards require this.
 	 * Certain Hynix 5.x cards giving read timeout even with 300ms.
 	 * Increasing further to max value (4s).
@@ -2230,14 +2199,6 @@ void mmc_ungate_clock(struct mmc_host *host)
 		WARN_ON(host->ios.clock);
 		/* This call will also set host->clk_gated to false */
 		__mmc_set_clock(host, host->clk_old);
-		/*
-		 * We have seen that host controller's clock tuning circuit may
-		 * go out of sync if controller clocks are gated.
-		 * To workaround this issue, we are triggering retuning of the
-		 * tuning circuit after ungating the controller clocks.
-		 */
-		if (host->sdr104_wa)
-			mmc_retune_needed(host);
 	}
 }
 
@@ -2259,32 +2220,6 @@ void mmc_set_ungated(struct mmc_host *host)
 {
 }
 #endif
-
-int mmc_execute_tuning(struct mmc_card *card)
-{
-	struct mmc_host *host = card->host;
-	u32 opcode;
-	int err;
-
-	if (!host->ops->execute_tuning)
-		return 0;
-
-	if (mmc_card_mmc(card))
-		opcode = MMC_SEND_TUNING_BLOCK_HS200;
-	else
-		opcode = MMC_SEND_TUNING_BLOCK;
-
-	mmc_host_clk_hold(host);
-	err = host->ops->execute_tuning(host, opcode);
-	mmc_host_clk_release(host);
-
-	if (err)
-		pr_err("%s: tuning execution failed\n", mmc_hostname(host));
-	else
-		mmc_retune_enable(host);
-
-	return err;
-}
 
 /*
  * Change the bus mode (open drain/push-pull) of a host.
@@ -2424,34 +2359,6 @@ int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 EXPORT_SYMBOL(mmc_of_parse_voltage);
 
 #endif /* CONFIG_OF */
-
-static int mmc_of_get_func_num(struct device_node *node)
-{
-	u32 reg;
-	int ret;
-
-	ret = of_property_read_u32(node, "reg", &reg);
-	if (ret < 0)
-		return ret;
-
-	return reg;
-}
-
-struct device_node *mmc_of_find_child_device(struct mmc_host *host,
-		unsigned func_num)
-{
-	struct device_node *node;
-
-	if (!host->parent || !host->parent->of_node)
-		return NULL;
-
-	for_each_child_of_node(host->parent->of_node, node) {
-		if (mmc_of_get_func_num(node) == func_num)
-			return node;
-	}
-
-	return NULL;
-}
 
 #ifdef CONFIG_REGULATOR
 
@@ -2784,7 +2691,6 @@ void mmc_power_up(struct mmc_host *host, u32 ocr)
 		return;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 
 	host->ios.vdd = fls(ocr) - 1;
 	if (mmc_host_is_spi(host))
@@ -2832,7 +2738,6 @@ void mmc_power_off(struct mmc_host *host)
 		return;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 
 	host->ios.clock = 0;
 	host->ios.vdd = 0;
@@ -3713,7 +3618,6 @@ static int mmc_do_hw_reset(struct mmc_host *host, int check)
 		return -EOPNOTSUPP;
 
 	mmc_host_clk_hold(host);
-	mmc_retune_disable(host);
 	mmc_set_clock(host, host->f_init);
 
 	if (mmc_card_mmc(card) && host->ops->hw_reset)
@@ -4304,14 +4208,6 @@ int mmc_pm_notify(struct notifier_block *notify_block,
 			err = host->bus_ops->pre_suspend(host);
 		if (!err)
 			break;
-
-		if (!mmc_card_is_removable(host)) {
-			dev_warn(mmc_dev(host),
-				 "pre_suspend failed for non-removable host: "
-				 "%d\n", err);
-			/* Avoid removing non-removable hosts */
-			break;
-		}
 
 		/* Calling bus_ops->remove() with a claimed host can deadlock */
 		host->bus_ops->remove(host);

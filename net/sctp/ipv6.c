@@ -97,9 +97,10 @@ static int sctp_inet6addr_event(struct notifier_block *this, unsigned long ev,
 
 	switch (ev) {
 	case NETDEV_UP:
-		addr = kzalloc(sizeof(*addr), GFP_ATOMIC);
+		addr = kmalloc(sizeof(struct sctp_sockaddr_entry), GFP_ATOMIC);
 		if (addr) {
 			addr->a.v6.sin6_family = AF_INET6;
+			addr->a.v6.sin6_port = 0;
 			addr->a.v6.sin6_addr = ifa->addr;
 			addr->a.v6.sin6_scope_id = ifa->idev->dev->ifindex;
 			addr->valid = 1;
@@ -322,10 +323,8 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 		final_p = fl6_update_dst(fl6, rcu_dereference(np->opt), &final);
 		bdst = ip6_dst_lookup_flow(sk, fl6, final_p);
 
-		if (IS_ERR(bdst))
-			continue;
-
-		if (ipv6_chk_addr(dev_net(bdst->dev),
+		if (!IS_ERR(bdst) &&
+		    ipv6_chk_addr(dev_net(bdst->dev),
 				  &laddr->a.v6.sin6_addr, bdst->dev, 1)) {
 			if (!IS_ERR_OR_NULL(dst))
 				dst_release(dst);
@@ -334,10 +333,8 @@ static void sctp_v6_get_dst(struct sctp_transport *t, union sctp_addr *saddr,
 		}
 
 		bmatchlen = sctp_v6_addr_match_len(daddr, &laddr->a);
-		if (matchlen > bmatchlen) {
-			dst_release(bdst);
+		if (matchlen > bmatchlen)
 			continue;
-		}
 
 		if (!IS_ERR_OR_NULL(dst))
 			dst_release(dst);
@@ -409,6 +406,7 @@ static void sctp_v6_copy_addrlist(struct list_head *addrlist,
 		addr = kzalloc(sizeof(*addr), GFP_ATOMIC);
 		if (addr) {
 			addr->a.v6.sin6_family = AF_INET6;
+			addr->a.v6.sin6_port = 0;
 			addr->a.v6.sin6_addr = ifp->addr;
 			addr->a.v6.sin6_scope_id = dev->ifindex;
 			addr->valid = 1;
@@ -511,9 +509,7 @@ static void sctp_v6_to_addr(union sctp_addr *addr, struct in6_addr *saddr,
 {
 	addr->sa.sa_family = AF_INET6;
 	addr->v6.sin6_port = port;
-	addr->v6.sin6_flowinfo = 0;
 	addr->v6.sin6_addr = *saddr;
-	addr->v6.sin6_scope_id = 0;
 }
 
 /* Compare addresses exactly.
@@ -720,10 +716,8 @@ static int sctp_v6_addr_to_user(struct sctp_sock *sp, union sctp_addr *addr)
 			sctp_v6_map_v4(addr);
 	}
 
-	if (addr->sa.sa_family == AF_INET) {
-		memset(addr->v4.sin_zero, 0, sizeof(addr->v4.sin_zero));
+	if (addr->sa.sa_family == AF_INET)
 		return sizeof(struct sockaddr_in);
-	}
 	return sizeof(struct sockaddr_in6);
 }
 
@@ -809,8 +803,6 @@ static void sctp_inet6_skb_msgname(struct sk_buff *skb, char *msgname,
 		if (ipv6_addr_type(&addr->v6.sin6_addr) & IPV6_ADDR_LINKLOCAL) {
 			struct sctp_ulpevent *ev = sctp_skb2event(skb);
 			addr->v6.sin6_scope_id = ev->iif;
-		} else {
-			addr->v6.sin6_scope_id = 0;
 		}
 	}
 

@@ -53,7 +53,7 @@
 
 #define WCD_MBHC_BTN_PRESS_COMPL_TIMEOUT_MS  50
 #define ANC_DETECT_RETRY_CNT 7
-#define WCD_MBHC_SPL_HS_CNT  2
+#define WCD_MBHC_SPL_HS_CNT  1
 
 static int det_extn_cable_en;
 module_param(det_extn_cable_en, int,
@@ -743,7 +743,7 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 static bool wcd_mbhc_detect_anc_plug_type(struct wcd_mbhc *mbhc)
 {
 	bool anc_mic_found = false;
-	u16 val = 0, hs_comp_res = 0, btn_status = 0;
+	u16 val, hs_comp_res, btn_status = 0;
 	unsigned long retry = 0;
 	int valid_plug_cnt = 0, invalid_plug_cnt = 0;
 	int btn_status_cnt = 0;
@@ -755,10 +755,6 @@ static bool wcd_mbhc_detect_anc_plug_type(struct wcd_mbhc *mbhc)
 		return false;
 
 	if (!mbhc->mbhc_cb->mbhc_micbias_control)
-		return false;
-
-	// Fail when reg WCD_MBHC_FSM_EN is not valid
-	if (!mbhc->wcd_mbhc_regs[WCD_MBHC_FSM_EN].reg)
 		return false;
 
 	WCD_MBHC_REG_READ(WCD_MBHC_FSM_EN, val);
@@ -793,8 +789,7 @@ static bool wcd_mbhc_detect_anc_plug_type(struct wcd_mbhc *mbhc)
 		pr_debug("%s: Retry attempt %lu\n", __func__, retry + 1);
 		WCD_MBHC_REG_READ(WCD_MBHC_HS_COMP_RESULT, hs_comp_res);
 
-		if (!hs_comp_res &&
-			mbhc->wcd_mbhc_regs[WCD_MBHC_HS_COMP_RESULT].reg) {
+		if (!hs_comp_res) {
 			valid_plug_cnt++;
 			is_check_btn_press = true;
 		} else
@@ -923,12 +918,6 @@ static int wcd_check_cross_conn(struct wcd_mbhc *mbhc)
 		if (mbhc->mbhc_cb->hph_pa_on_status(mbhc->codec))
 			return false;
 
-
-	if (mbhc->mbhc_cb->hph_pull_down_ctrl) {
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_L_DET_EN, 0);
-		mbhc->mbhc_cb->hph_pull_down_ctrl(mbhc->codec, false);
-	}
-
 	WCD_MBHC_REG_READ(WCD_MBHC_ELECT_SCHMT_ISRC, reg1);
 	/*
 	 * Check if there is any cross connection,
@@ -961,12 +950,6 @@ static int wcd_check_cross_conn(struct wcd_mbhc *mbhc)
 	/* Disable schmitt trigger and restore micbias */
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_ELECT_SCHMT_ISRC, reg1);
 	pr_debug("%s: leave, plug type: %d\n", __func__,  plug_type);
-
-	if (mbhc->mbhc_cb->hph_pull_down_ctrl) {
-		mbhc->mbhc_cb->hph_pull_down_ctrl(mbhc->codec, true);
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_L_DET_EN, 1);
-	}
-
 
 	return (plug_type == MBHC_PLUG_TYPE_GND_MIC_SWAP) ? true : false;
 }
@@ -1488,6 +1471,9 @@ static void wcd_mbhc_detect_plug_type(struct wcd_mbhc *mbhc)
 
 	pr_debug("%s: enter\n", __func__);
 	WCD_MBHC_RSC_ASSERT_LOCKED(mbhc);
+
+	if (mbhc->mbhc_cb->hph_pull_down_ctrl)
+		mbhc->mbhc_cb->hph_pull_down_ctrl(codec, false);
 
 	if (mbhc->mbhc_cb->micbias_enable_status)
 		micbias1 = mbhc->mbhc_cb->micbias_enable_status(mbhc,
@@ -2146,9 +2132,6 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 
 	/* Insertion debounce set to 96ms */
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 6);
-	/* configure insertion debounce according to the setting in dts's sound node */
-	if (mbhc->insert_debounce >= 0 && mbhc->insert_debounce <= 0xF)
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, mbhc->insert_debounce);
 	/* Button Debounce set to 16ms */
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_BTN_DBNC, 2);
 
@@ -2392,7 +2375,6 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	struct snd_soc_card *card = codec->component.card;
 	const char *hph_switch = "qcom,msm-mbhc-hphl-swh";
 	const char *gnd_switch = "qcom,msm-mbhc-gnd-swh";
-	const char *insert_debounce = "qcom,msm-hs-insert-debounce";
 
 	pr_debug("%s: enter\n", __func__);
 
@@ -2409,15 +2391,6 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 			"%s: missing %s in dt node\n", __func__, gnd_switch);
 		goto err;
 	}
-
-	ret = of_property_read_u32(card->dev->of_node, insert_debounce, &mbhc->insert_debounce);
-	if (ret) {
-		dev_err(card->dev,
-			"%s: missing %s in dt node\n", __func__, insert_debounce);
-		mbhc->insert_debounce = -1;
-	}
-	if (mbhc->insert_debounce > 0xF)
-		mbhc->insert_debounce = 0xF;
 
 	mbhc->in_swch_irq_handler = false;
 	mbhc->current_plug = MBHC_PLUG_TYPE_NONE;

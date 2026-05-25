@@ -23,7 +23,3 @@ $(obj)/regdb.c: $(src)/db.txt $(src)/genregdb.awk
 	@$(AWK) -f $(srctree)/$(src)/genregdb.awk < $< > $@
 
 clean-files := regdb.c
-
-#TODO: remove me b/62058353
-subdir-ccflags-y += \
-	-Wno-enum-conversion

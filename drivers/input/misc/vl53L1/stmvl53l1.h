@@ -275,7 +275,6 @@ struct stmvl53l1_data {
 	uint32_t auto_pollingTimeInMs_cam;
 	VL53L1_DetectionConfig_t auto_config_cam;
 
-	int sysfs_base;
 	/* Debug */
 	struct ipp_data_t ipp;
 #if IPP_LOG_TIMING
@@ -315,7 +314,6 @@ int stmvl53l1_setup(struct stmvl53l1_data *data);
 void stmvl53l1_cleanup(struct stmvl53l1_data *data);
 int stmvl53l1_intr_handler(struct stmvl53l1_data *data);
 
-int stmvl53l1_sysfs_laser(struct stmvl53l1_data *data, bool create);
 
 /**
  * request ipp to abort or stop

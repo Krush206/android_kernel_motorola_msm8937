@@ -32,6 +32,7 @@
 #include <linux/cpufreq.h>
 #include <linux/cpuidle.h>
 #include <linux/timer.h>
+#include <linux/wakeup_reason.h>
 
 #include "../base.h"
 #include "power.h"
@@ -158,6 +159,12 @@ void device_pm_move_before(struct device *deva, struct device *devb)
 	pr_debug("PM: Moving %s:%s before %s:%s\n",
 		 deva->bus ? deva->bus->name : "No Bus", dev_name(deva),
 		 devb->bus ? devb->bus->name : "No Bus", dev_name(devb));
+	if (!((devb->pm_domain) || (devb->type && devb->type->pm)
+		|| (devb->class && (devb->class->pm || devb->class->resume))
+		|| (devb->bus && (devb->bus->pm || devb->bus->resume)) ||
+		(devb->driver && devb->driver->pm))) {
+		device_pm_add(devb);
+	}
 	/* Delete deva from dpm_list and reinsert before devb. */
 	list_move_tail(&deva->power.entry, &devb->power.entry);
 }
@@ -172,6 +179,12 @@ void device_pm_move_after(struct device *deva, struct device *devb)
 	pr_debug("PM: Moving %s:%s after %s:%s\n",
 		 deva->bus ? deva->bus->name : "No Bus", dev_name(deva),
 		 devb->bus ? devb->bus->name : "No Bus", dev_name(devb));
+	if (!((devb->pm_domain) || (devb->type && devb->type->pm)
+		|| (devb->class && (devb->class->pm || devb->class->resume))
+		|| (devb->bus && (devb->bus->pm || devb->bus->resume)) ||
+		(devb->driver && devb->driver->pm))) {
+		device_pm_add(devb);
+	}
 	/* Delete deva from dpm_list and reinsert after devb. */
 	list_move(&deva->power.entry, &devb->power.entry);
 }
@@ -1337,14 +1350,13 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 	pm_callback_t callback = NULL;
 	char *info = NULL;
 	int error = 0;
+	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
 	DECLARE_DPM_WATCHDOG_ON_STACK(wd);
 
 	dpm_wait_for_children(dev, async);
 
-	if (async_error) {
-		dev->power.direct_complete = false;
+	if (async_error)
 		goto Complete;
-	}
 
 	/*
 	 * If a device configured to wake up the system from sleep states
@@ -1356,7 +1368,9 @@ static int __device_suspend(struct device *dev, pm_message_t state, bool async)
 		pm_wakeup_event(dev, 0);
 
 	if (pm_wakeup_pending()) {
-		dev->power.direct_complete = false;
+		pm_get_active_wakeup_sources(suspend_abort,
+			MAX_SUSPEND_ABORT_LEN);
+		log_suspend_abort_reason(suspend_abort);
 		async_error = -EBUSY;
 		goto Complete;
 	}

@@ -23,16 +23,12 @@
 #include <sound/apr_audio-v2.h>
 #include <sound/q6afe-v2.h>
 #include <sound/q6audio-v2.h>
-#include <sound/q6core.h>
 #include "msm-pcm-routing-v2.h"
 #include <sound/audio_cal_utils.h>
 #include <sound/adsp_err.h>
 #include <linux/qdsp6v2/apr_tal.h>
 #ifdef CONFIG_SND_SOC_OPALUM
 #include <sound/ospl2xx.h>
-#endif
-#ifdef CONFIG_SND_SOC_TAS2560
-#include <sound/tas2560_algo.h>
 #endif
 
 #define WAKELOCK_TIMEOUT	5000
@@ -128,12 +124,7 @@ struct afe_ctl {
 	int set_custom_topology;
 };
 
-#define MAD_SLIMBUS_PORT_COUNT ((SLIMBUS_PORT_LAST - SLIMBUS_0_RX) + 1)
-#define MAD_MI2S_PORT_COUNT ((MI2S_PORT_LAST - AFE_PORT_ID_PRIMARY_MI2S_TX) \
-				+ 1)
-
-static atomic_t afe_ports_mad_type[MAD_SLIMBUS_PORT_COUNT +
-				MAD_MI2S_PORT_COUNT];
+static atomic_t afe_ports_mad_type[SLIMBUS_PORT_LAST - SLIMBUS_0_RX];
 static unsigned long afe_configured_cmd;
 
 static struct afe_ctl this_afe;
@@ -145,17 +136,6 @@ int ospl2xx_afe_set_callback(
 	int32_t (*ospl2xx_callback_func)(struct apr_client_data *data))
 {
 	ospl2xx_callback = ospl2xx_callback_func;
-	return 0;
-}
-#endif
-
-#ifdef CONFIG_SND_SOC_TAS2560
-int32_t (*tas2560_algo_callback)(struct apr_client_data *data);
-
-int tas2560_algo_afe_set_callback(
-	int32_t (*tas2560_algo_callback_func)(struct apr_client_data *data))
-{
-	tas2560_algo_callback = tas2560_algo_callback_func;
 	return 0;
 }
 #endif
@@ -352,16 +332,6 @@ static int32_t afe_callback(struct apr_client_data *data, void *priv)
 			atomic_set(&this_afe.state, 0);
 		} else {
 #endif
-#ifdef CONFIG_SND_SOC_TAS2560
-		int32_t *payload32 = data->payload;
-
-		if ((payload32[1] == AFE_TAS2560_ALGO_MODULE_RX) ||
-		     (payload32[1] == AFE_TAS2560_ALGO_MODULE_TX)) {
-			if (tas2560_algo_callback != NULL)
-				tas2560_algo_callback(data);
-			atomic_set(&this_afe.state, 0);
-		} else {
-#endif
 		if (rtac_make_afe_callback(data->payload, data->payload_size))
 			return 0;
 
@@ -373,7 +343,7 @@ static int32_t afe_callback(struct apr_client_data *data, void *priv)
 		}
 		if (sp_make_afe_callback(data->payload, data->payload_size))
 			return -EINVAL;
-#if defined(CONFIG_SND_SOC_OPALUM) || defined(CONFIG_SND_SOC_TAS2560)
+#ifdef CONFIG_SND_SOC_OPALUM
 		}
 #endif
 		wake_up(&this_afe.wait[data->token]);
@@ -599,7 +569,6 @@ int afe_get_port_type(u16 port_id)
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_5:
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_6:
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_7:
-	case AFE_LOOPBACK_TX:
 		ret = MSM_AFE_PORT_TYPE_TX;
 		break;
 
@@ -752,15 +721,6 @@ int ospl2xx_afe_apr_send_pkt(void *data, int index)
 }
 #endif
 
-#ifdef CONFIG_SND_SOC_TAS2560
-int tas2560_algo_afe_apr_send_pkt(void *data, int index)
-{
-	int ret = 0;
-
-	ret = afe_apr_send_pkt(data, &this_afe.wait[index]);
-	return ret;
-}
-#endif
 static int afe_send_cal_block(u16 port_id, struct cal_block_data *cal_block)
 {
 	int						result = 0;
@@ -1986,11 +1946,8 @@ int afe_port_set_mad_type(u16 port_id, enum afe_mad_type mad_type)
 		mad_type = MAD_SW_AUDIO;
 		return 0;
 	}
-	if (port_id == AFE_PORT_ID_QUATERNARY_MI2S_TX)
-		i = MAD_SLIMBUS_PORT_COUNT + (port_id -
-				AFE_PORT_ID_PRIMARY_MI2S_TX) - 1;
-	else
-		i = port_id - SLIMBUS_0_RX;
+
+	i = port_id - SLIMBUS_0_RX;
 	if (i < 0 || i >= ARRAY_SIZE(afe_ports_mad_type)) {
 		pr_err("%s: Invalid port_id 0x%x\n", __func__, port_id);
 		return -EINVAL;
@@ -2005,11 +1962,8 @@ enum afe_mad_type afe_port_get_mad_type(u16 port_id)
 
 	if (port_id == AFE_PORT_ID_TERTIARY_MI2S_TX)
 		return MAD_SW_AUDIO;
-	if (port_id == AFE_PORT_ID_QUATERNARY_MI2S_TX)
-		i = MAD_SLIMBUS_PORT_COUNT + (port_id -
-			AFE_PORT_ID_PRIMARY_MI2S_TX) - 1;
-	else
-		i = port_id - SLIMBUS_0_RX;
+
+	i = port_id - SLIMBUS_0_RX;
 	if (i < 0 || i >= ARRAY_SIZE(afe_ports_mad_type)) {
 		pr_debug("%s: Non Slimbus port_id 0x%x\n", __func__, port_id);
 		return MAD_HW_NONE;
@@ -3108,8 +3062,6 @@ int afe_get_port_index(u16 port_id)
 		return IDX_AFE_PORT_ID_QUATERNARY_TDM_RX_7;
 	case AFE_PORT_ID_QUATERNARY_TDM_TX_7:
 		return IDX_AFE_PORT_ID_QUATERNARY_TDM_TX_7;
-	case AFE_LOOPBACK_TX:
-		return IDX_AFE_LOOPBACK_TX;
 	default:
 		pr_err("%s: port 0x%x\n", __func__, port_id);
 		return -EINVAL;
@@ -5391,39 +5343,6 @@ int afe_set_lpass_clock_v2(u16 port_id, struct afe_clk_set *cfg)
 	return ret;
 }
 
-static int afe_get_service_ver(void)
-{
-	int ret;
-
-	ret = q6core_get_avcs_fwk_ver_info(AVCS_SERVICE_ID_AFE, NULL);
-	if (ret)
-		pr_err("%s: failed to get version info for AFE service %d\n",
-		       __func__, AVCS_SERVICE_ID_AFE);
-
-	return ret;
-}
-
-enum lpass_clk_ver afe_get_lpass_clk_ver(void)
-{
-	enum lpass_clk_ver lpass_clk_ver;
-
-	/*
-	 * Use different APIs to set the LPASS clock depending on the AFE
-	 * version. On success afe_get_service_ver returns 0 signyfing the
-	 * latest AFE version is supported. Use LPASS clock version 2 if the
-	 * latest AFE version is supported, otherwise use LPASS clock version 1.
-	 */
-	lpass_clk_ver = (afe_get_service_ver() == 0) ?
-		LPASS_CLK_VER_2 : LPASS_CLK_VER_1;
-
-	pr_debug("%s: returning %s\n", __func__,
-		 (lpass_clk_ver == LPASS_CLK_VER_2) ?
-			"LPASS_CLK_VER_2" : "LPASS_CLK_VER_1");
-
-	return lpass_clk_ver;
-}
-EXPORT_SYMBOL(afe_get_lpass_clk_ver);
-
 int afe_set_lpass_internal_digital_codec_clock(u16 port_id,
 			struct afe_digital_clk_cfg *cfg)
 {
@@ -5634,12 +5553,6 @@ int afe_get_sp_th_vi_ftm_data(struct afe_sp_th_vi_get_param *th_vi)
 		goto done;
 	}
 	index = q6audio_get_port_index(port);
-	if (index < 0) {
-		pr_err("%s: invalid port 0x%x, index %d\n",
-			__func__, port, index);
-		ret = -EINVAL;
-		goto done;
-	}
 	th_vi->hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
 				APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
 	th_vi->hdr.pkt_size = sizeof(*th_vi);
@@ -5714,12 +5627,6 @@ int afe_get_sp_ex_vi_ftm_data(struct afe_sp_ex_vi_get_param *ex_vi)
 	}
 
 	index = q6audio_get_port_index(port);
-	if (index < 0 || index >= AFE_MAX_PORTS) {
-		pr_err("%s: AFE port index[%d] invalid!\n",
-				__func__, index);
-		ret = -EINVAL;
-		goto done;
-	}
 	ex_vi->hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
 				APR_HDR_LEN(APR_HDR_SIZE), APR_PKT_VER);
 	ex_vi->hdr.pkt_size = sizeof(*ex_vi);

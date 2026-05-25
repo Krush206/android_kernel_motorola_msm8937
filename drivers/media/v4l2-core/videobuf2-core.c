@@ -2064,11 +2064,6 @@ static int vb2_internal_dqbuf(struct vb2_queue *q, struct v4l2_buffer *b, bool n
 	dprintk(1, "dqbuf of buffer %d, with state %d\n",
 			vb->v4l2_buf.index, vb->state);
 
-	/*
-	 * After calling the VIDIOC_DQBUF V4L2_BUF_FLAG_DONE must be
-	 * cleared.
-	 */
-	b->flags &= ~V4L2_BUF_FLAG_DONE;
 	return 0;
 }
 
@@ -2463,13 +2458,9 @@ int vb2_mmap(struct vb2_queue *q, struct vm_area_struct *vma)
 			return -EINVAL;
 		}
 	}
-
-	mutex_lock(&q->mmap_lock);
-
 	if (vb2_fileio_is_active(q)) {
 		dprintk(1, "mmap: file io in progress\n");
-		ret = -EBUSY;
-		goto unlock;
+		return -EBUSY;
 	}
 
 	/*
@@ -2477,7 +2468,7 @@ int vb2_mmap(struct vb2_queue *q, struct vm_area_struct *vma)
 	 */
 	ret = __find_plane_by_offset(q, off, &buffer, &plane);
 	if (ret)
-		goto unlock;
+		return ret;
 
 	vb = q->bufs[buffer];
 
@@ -2490,13 +2481,11 @@ int vb2_mmap(struct vb2_queue *q, struct vm_area_struct *vma)
 	if (length < (vma->vm_end - vma->vm_start)) {
 		dprintk(1,
 			"MMAP invalid, as it would overflow buffer length\n");
-		ret = -EINVAL;
-		goto unlock;
+		return -EINVAL;
 	}
 
+	mutex_lock(&q->mmap_lock);
 	ret = call_memop(vb, mmap, vb->planes[plane].mem_priv, vma);
-
-unlock:
 	mutex_unlock(&q->mmap_lock);
 	if (ret)
 		return ret;

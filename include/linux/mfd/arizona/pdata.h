@@ -323,9 +323,6 @@ struct arizona_pdata {
 
 	/* Report headset state as an input switch event */
 	bool report_to_input;
-
-	/* Support Headphone Crosstalk with better referenece GND*/
-	bool headphone_crosstalk_improve;
 };
 
 #endif

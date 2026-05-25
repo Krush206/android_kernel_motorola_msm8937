@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -515,17 +515,11 @@ static int swrm_read(struct swr_master *master, u8 dev_num, u16 reg_addr,
 		return -EINVAL;
 	}
 
-	if (dev_num) {
+	if (dev_num)
 		ret = swrm_cmd_fifo_rd_cmd(swrm, &val, dev_num, 0, reg_addr,
 					   len);
-		if (ret < 0) {
-			dev_err(&master->dev, "%s: failed, err:%d\n",
-				__func__, ret);
-			return ret;
-		}
-	} else {
+	else
 		val = swrm->read(swrm->handle, reg_addr);
-	}
 
 	*reg_val = (u8)val;
 	pm_runtime_mark_last_busy(&swrm->pdev->dev);
@@ -759,7 +753,7 @@ inc_loop:
 			list_del(&mport->list);
 			kfree(mport);
 		}
-		if (!mport_next || (&mport_next->list == &swrm->mport_list)) {
+		if (!mport_next) {
 			dev_err(swrm->dev, "%s: end of list\n", __func__);
 			break;
 		}
